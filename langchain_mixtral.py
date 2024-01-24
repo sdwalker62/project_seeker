@@ -6,7 +6,8 @@ import uvicorn
 from requests import request
 import json
 import ast
-import tomllib
+import toml
+from pathlib import Path
 from copy import deepcopy
 
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
@@ -29,12 +30,16 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.prompt_values import PromptValue
 
-with open("config.toml", "rb") as f:
-    conf = tomllib.load(f)
+config_path = Path("./config.toml").absolute()
+if config_path.exists():
+    conf = toml.load(str(config_path))
     llm_server_conf = conf["llm-server"]
     llm_conf = conf["mixtral8x7b"]
     llm_host = llm_server_conf["host"]
     llm_host_port = llm_server_conf["port"]
+else:
+    raise FileNotFoundError("config.toml not found")
+
 
 __HEADERS__ = {
     "content-type": "application/json",
