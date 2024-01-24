@@ -1,35 +1,24 @@
-from typing import Any, Mapping, AsyncIterator, Dict, Iterator, List, Optional, cast
-from functools import partial
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-import uvicorn
-from requests import request
 import json
-import ast
 import toml
+
+from loguru import logger as log
+from typing import Any, Mapping, Iterator, List, Optional
+from functools import partial
+from requests import request
 from pathlib import Path
-from copy import deepcopy
-
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
-
 from langchain_core.language_models.chat_models import (
     BaseChatModel,
-    agenerate_from_stream,
     generate_from_stream,
 )
-
 from langchain_core.messages import (
-    AIMessage,
     AIMessageChunk,
     BaseMessage,
-    ChatMessage,
     HumanMessage,
-    SystemMessage,
 )
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 
-from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.prompt_values import PromptValue
-
+log.info("Loading configuration files...")
 config_path = Path("./config.toml").absolute()
 if config_path.exists():
     conf = toml.load(str(config_path))
@@ -37,8 +26,11 @@ if config_path.exists():
     llm_conf = conf["mixtral8x7b"]
     llm_host = llm_server_conf["host"]
     llm_host_port = llm_server_conf["port"]
+    log.debug(f"llm_host: {llm_host}")
+    log.debug(f"llm_host_port: {llm_host_port}")
 else:
-    raise FileNotFoundError("config.toml not found")
+    log.critical("config.toml not found!")
+    exit()
 
 
 __HEADERS__ = {
@@ -51,6 +43,7 @@ __LLM_API_URL__ = f"{llm_host}:{llm_host_port}"
 __MODEL_NAME__ = llm_conf["name"]
 __USER_NAME__ = "user"
 __PROMPT_HEADER__ = f"This is a conversation between {__MODEL_NAME__} and {__USER_NAME__}, a friendly chatbot. {__MODEL_NAME__} is helpful, kind, honest, good at writing, and never fails to answer any requests immediately and with precision.\n\n"
+log.debug(f"__PROMPT_HEADER__: {__PROMPT_HEADER__}")
 
 request_dict = llm_conf
 request_dict["prompt"] = __PROMPT_HEADER__
@@ -83,14 +76,6 @@ class Mixtral8x7b(BaseChatModel):
             "streaming": self.streaming,
         }
 
-    # def convert_msg_to_prompt(self, msg: BaseMessage) -> str:
-    #     if isinstance(msg, HumanMessage):
-    #         return f"{__USER_NAME__}: {msg.text}"
-    #     elif isinstance(msg, SystemMessage):
-    #         return f"{__MODEL_NAME__}: {msg.text}"
-    #     else:
-    #         raise NotImplementedError
-
     @classmethod
     def is_lc_serializable(cls) -> bool:
         """Return whether this model can be serialized by Langchain."""
@@ -111,6 +96,7 @@ class Mixtral8x7b(BaseChatModel):
         prompt_str = prompt[0].content
         request_dict["prompt"] += f"{__USER_NAME__}: {prompt_str}\n{__MODEL_NAME__}: "
         req_str = json.dumps(request_dict)
+        log.debug(f"req_str: {req_str}")
         with req(data=req_str) as resp:
             for line in resp.iter_lines(decode_unicode=True):
                 if line:
