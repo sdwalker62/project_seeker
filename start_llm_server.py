@@ -1,19 +1,8 @@
 import toml
 import os
 
-from typing import Union
 from pathlib import Path
 from loguru import logger as log
-
-
-def convert_option(opt: Union[str, int, bool]) -> str:
-    if isinstance(opt, bool):
-        if opt:
-            return "true"
-        else:
-            return "false"
-    else:
-        return opt
 
 
 if __name__ == "__main__":
