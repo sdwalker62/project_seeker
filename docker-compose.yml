@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  llm-server:
+    image: llm-server:latest
+    volumes:
+      - /home/dwalker/project_seeker/models/mixtral8x7b-q4/:/app/models/mixtral8x7b-q4/
+      - /home/dwalker/project_seeker/build/llm-server/bin:/app/bin/
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 8
+              capabilities: [gpu]

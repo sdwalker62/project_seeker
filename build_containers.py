@@ -1,4 +1,5 @@
 import docker
+import argparse
 from loguru import logger as log
 from pathlib import Path
 
@@ -39,14 +40,34 @@ def build_image(image_name: str, dockerfile: str, tag: str) -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog="Container Factory",
+        description="This script builds the containers for the LLM project.",
+        epilog="By Athena",
+    )
+
+    parser.add_argument("force", metavar="F", type=bool, help="Force container rebuild")
+    args = parser.parse_args()
+
     image_list = client.images.list()
-    image_tags = [image.tags[0] for image in image_list]
+    image_tags = [image.tags[0] for image in image_list if len(image.tags) > 0]
     for image_name in __IMAGE_LIST__:
         if image_name in image_tags:
             log.info(f"Found {image_name} image!")
+            if args.force:
+                log.info(f"Rebuilding {image_name} image...")
+                if image_name == "llm-server:latest":
+                    build_image(
+                        "llm-server",
+                        "./build/llm-server/llm-server.Dockerfile",
+                        "llm-server:latest",
+                    )
+                else:
+                    log.critical(f"Unknown image name: {image_name}!")
+                    exit()
         else:
             log.info(f"Building {image_name} image...")
-            if image_name == "llm-server":
+            if image_name == "llm-server:latest":
                 build_image(
                     "llm-server",
                     "./build/llm-server/llm-server.Dockerfile",
