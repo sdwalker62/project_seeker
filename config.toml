@@ -1,6 +1,31 @@
 [llm-server]
+# https://github.com/ggerganov/llama.cpp/tree/master/examples/server
+threads = 128
+threads-batch = 128
+model = "./models/mixtral8x7b-q4/mixtral-8x7b-v0.1.Q4_K_M.gguf"
+alias = "NITMRE-LLM"
+ctx-size = 4096
+n-gpu-layers = 128
+main-gpu = 0
+# tensor-split = []
+batch-size = 512
+# memory-f32
+mlock = false
+# no-mmap
+# numa
+# lora
+# lora-base
+timeout = 600
 host = "http://127.0.0.1"
 port = 8080
+path = "examples/server/public"
+# api-key
+# api-key-file
+# embedding
+parallel = 8
+cont-batching = false
+# system-prompt-file
+# mmproj
 
 [api-server]
 host = "127.0.0.1"
