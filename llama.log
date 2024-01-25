@@ -1,0 +1,14 @@
+[1706149103] 
+llama server listening at http://127.0.0.1:7000
+
+[1706149109] warming up the model with an empty run
+[1706149109] Available slots:
+[1706149109]  -> Slot 0 - max context: 512
+[1706149109]  -> Slot 1 - max context: 512
+[1706149109]  -> Slot 2 - max context: 512
+[1706149109]  -> Slot 3 - max context: 512
+[1706149109]  -> Slot 4 - max context: 512
+[1706149109]  -> Slot 5 - max context: 512
+[1706149109]  -> Slot 6 - max context: 512
+[1706149109]  -> Slot 7 - max context: 512
+[1706149109] all slots are idle and system prompt is empty, clear the KV cache
