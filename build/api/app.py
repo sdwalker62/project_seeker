@@ -15,6 +15,11 @@ from langchain_core.runnables import (
     RunnablePassthrough,
     RunnableParallel,
 )
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import LLMChainExtractor
+from langchain.retrievers.document_compressors import LLMChainFilter
+from langchain.retrievers.document_compressors import EmbeddingsFilter
+from langchain_core.language_models.llms import BaseLLM
 
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from langchain_community.document_loaders.json_loader import JSONLoader
@@ -66,7 +71,7 @@ def generate(prompt: str) -> str:
 
 @app.get("/rag_generate")
 def rag_generate(prompt: str) -> str:
-    resp = rag_chain_with_source.invoke(prompt)
+    resp = retriever.prompt_builder(prompt)
     return resp
 
 
@@ -76,6 +81,7 @@ def start_server(host: str, port: int) -> None:
 
 
 class Retriever:
+    use_qdrant: bool = False
     chunk_size: int = 384
     """all-MiniLM-L6-v2 has a max token limit of 384."""
     chunk_overlap: int = 100
@@ -85,14 +91,21 @@ class Retriever:
     embedding_model_name: str = "all-MiniLM-L6-v2"
     embedding_model: HuggingFaceEmbeddings = None
     """Use a local embedding model to avoid reaching out to the internet."""
+    sim_thresh: float = 0.4
+    embedding_filter: EmbeddingsFilter = None
+    compression_retriever: ContextualCompressionRetriever = None
     documents: List[Document] = None
     """List of Document objects provided to the retriever as context."""
     retriever: VectorStoreRetriever = None
     model: Mixtral8x7b = Mixtral8x7b()
 
     def __init__(
-        self, document_struct: Dict[str, Dict[str, Path]], embedding_model_name: str
+        self,
+        document_struct: Dict[str, Dict[str, Path]],
+        embedding_model_name: str,
+        model: BaseLLM,
     ):
+        self.model = model
         self.embedding_model_name = embedding_model_name
         self.embedding_model = HuggingFaceEmbeddings(model_name=embedding_model_name)
         self.documents = self.load_documents(document_struct)
@@ -100,13 +113,63 @@ class Retriever:
         # The Qdrant variant is set to use :memory: as the location, which means it will
         # only be available in the current session. This is useful for testing but should
         # be changed for production.
-        self.vector_datastore = Qdrant.from_documents(
-            self.documents,
-            self.embedding_model,
-            location=":memory:",
-            collection_name="acronyms",
-        )
+        if self.use_qdrant:
+            self.vector_datastore = Qdrant.from_documents(
+                self.documents,
+                self.embedding_model,
+                location=":memory:",
+                collection_name="acronyms",
+            )
+        else:
+            self.vector_datastore = Chroma.from_documents(
+                self.documents, self.embedding_model
+            )
         self.retriever = self.vector_datastore.as_retriever()
+        self.embedding_filter = EmbeddingsFilter(
+            embeddings=self.embedding_model, similarity_threshold=self.sim_thresh
+        )
+        self.compression_retriever = ContextualCompressionRetriever(
+            base_compressor=self.embedding_filter, base_retriever=self.retriever
+        )
+
+    def prompt_builder(self, prompt: str) -> str:
+        header = "<s> [INST] You are a helpful AI assistant whose job is to answer questions as accurately as possible. [/INST] "
+        prompt_template = PromptTemplate.from_template(
+            "{header} User: {prompt} Assistant: "
+        )
+        compressed_docs = self.compression_retriever.get_relevant_documents(prompt)
+        useful_information = []
+        if len(compressed_docs) == 0:
+            log.error("No documents found that match the threshold.")
+            log.error("Current threshold: {self.sim_thresh}")
+            log.error("Dispatching prompt without modifications!")
+            prompt = prompt_template.format(header=header, prompt=prompt)
+            return model.invoke(prompt)
+        else:
+            log.info("Found relavent documents")
+            for doc in compressed_docs:
+                log.info("====================================================")
+                log.info(f"Document: {doc.page_content}")
+                log.info("====================================================")
+                splits = doc.page_content.split("\n")
+                acronym, meaning = (
+                    splits[0].split(":")[1].strip(),
+                    splits[1].split(":")[1].strip(),
+                )
+                useful_information.append({"acronym": acronym, "meaning": meaning})
+            for info in useful_information:
+                header += f" [INST] This acronym is useful: {info['acronym']} = {info['meaning']} [/INST] "
+            prompt = prompt_template.format(header=header, prompt=prompt)
+            log.info(f"Dispatching prompt with modifications: {prompt}")
+            return model.invoke(prompt)
+
+    @staticmethod
+    def pretty_print_docs(docs):
+        print(
+            f"\n{'-' * 100}\n".join(
+                [f"Document {i+1}:\n\n" + d.page_content for i, d in enumerate(docs)]
+            )
+        )
 
     def load_documents(self, documents: Dict[str, Dict[str, Path]]) -> List[Document]:
         retrieved_documents = []
@@ -206,15 +269,15 @@ if __name__ == "__main__":
             "acronyms": Path("./acronyms.csv"),
         }
     }
+    model = Mixtral8x7b()
     retriever = Retriever(
-        document_struct=documents, embedding_model_name="all-MiniLM-L6-v2"
+        document_struct=documents, embedding_model_name="all-MiniLM-L6-v2", model=model
     )
     # retriever = qdrant.as_retriever()
     # prompt = hub.pull("rlm/rag-prompt")
     log.info("Loaded retriever!")
 
     # log.info("Loading model...")
-    model = Mixtral8x7b()
     # log.info("Loaded model!")
 
     # log.info("Creating 'RAG' chain...")

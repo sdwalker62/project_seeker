@@ -3,7 +3,7 @@ import fire
 
 
 def main(prompt: str):
-    url = f"http://0.0.0.0:5000/generate?prompt={prompt}"
+    url = f"http://0.0.0.0:5000/rag_generate?prompt={prompt}"
     resp = requests.get(url)
     print(resp.text)
 
