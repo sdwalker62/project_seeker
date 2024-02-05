@@ -67,6 +67,7 @@ def rag_chatbot(prompt: str) -> str:
 
 
 def start_server(host: str, port: int) -> None:
+    log.info(f"Starting server: HOST: {host}, PORT: {port}...")
     uvicorn.run(app, host=host, port=port)
 
 

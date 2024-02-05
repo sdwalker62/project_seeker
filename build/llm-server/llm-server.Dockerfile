@@ -12,14 +12,22 @@ WORKDIR /app/
 
 RUN conda install -c conda-forge -y python=3.10
 
+RUN apt-get update -y && apt-get install -y unzip curl
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" &&\
+    unzip awscliv2.zip &&\
+    ./aws/install &&\
+    rm awscliv2.zip
+
 # COPY models/ /app/models/
 COPY /build/llm-server/bin /app/bin/
-COPY build/llm-server/start.py /app/start.py
 COPY config.toml /app/config.toml
 COPY build/llm-server/requirements.txt /app/requirements.txt
 RUN pip3 install -r /app/requirements.txt
 
-ENV LLM_SERVER_THREADS=128
-ENV LLM_SERVER_THREADS_BATCH=128
+COPY build/llm-server/start.py /app/start.py
+
+ENV LLM_SERVER_THREADS=8
+ENV LLM_SERVER_THREADS_BATCH=8
 
 CMD ["python3", "/app/start.py"]
