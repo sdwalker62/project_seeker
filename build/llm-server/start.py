@@ -7,23 +7,43 @@ from loguru import logger as log
 
 __USE_LOCAL__ = os.environ.get("LOCAL_MODELS", "False") == "True"
 __BUCKET_NAME__ = "nitmre-models"
-__REMOTE_DIR_NAME__ = "llm/"
+__REMOTE_MODEL_NAME__ = "llm/mixtral-8x7b-instruct-v0.1.Q6_K.gguf"
 
-def downloadDirectoryFroms3(bucketName, remoteDirectoryName):
+def downloadDirectoryFroms3(bucket_name, object_name):
+    #connect to the S3 bucket 
     s3_resource = boto3.resource('s3')
-    bucket = s3_resource.Bucket(bucketName) 
-    for obj in bucket.objects.filter(Prefix = remoteDirectoryName):
-        model_path = os.path.dirname(obj.key).replace('llm', 'models')
-        if not os.path.exists(model_path):
-            os.makedirs(model_path, exist_ok=True)
-        bucket.download_file(obj.key, obj.key.replace('llm', 'models')) # save to same path
+    bucket = s3_resource.Bucket(bucket_name)
+
+    matches = list(bucket.objects.filter(Prefix = object_name))
+
+    model_obj = None
+
+    if len(matches) == 0:
+        log.critical(f"No objects found in {bucket_name} S3 bucket matching prefix {object_name}. Aborting...")
+        exit()
+    elif len(matches) == 1:
+        log.info(f"{object_name} found in {bucket_name} S3 bucket...")
+        model_obj = matches[0]
+    elif len(matches) > 1:
+        log.info(f"Multiple objects returned matching prefix: {object_name}, only using first... {matches[0].key}")
+        model_obj = matches[0]
+
+    model_path = model_obj.key.replace('llm', 'models')
+
+    if os.path.isfile(model_path):
+        log.info(f"{model_obj.key} found locally, skipping download...")
+    else:
+        model_dir = os.path.dirname(model_path)
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
+        bucket.download_file(model_obj.key, model_path)
 
 if __name__ == "__main__":   
     # Download from S3
     if not __USE_LOCAL__:
-        log.info(f"Downloading {__REMOTE_DIR_NAME__} from {__BUCKET_NAME__} S3 Bucket...")
-        downloadDirectoryFroms3(__BUCKET_NAME__, __REMOTE_DIR_NAME__)
-        log.info(f'{__REMOTE_DIR_NAME__} downloaded from {__BUCKET_NAME__} S3 Bucket...')
+        log.info(f"Downloading {__REMOTE_MODEL_NAME__} from {__BUCKET_NAME__} S3 Bucket...")
+        downloadDirectoryFroms3(__BUCKET_NAME__, __REMOTE_MODEL_NAME__)
+        log.info(f'{__REMOTE_MODEL_NAME__} downloaded from {__BUCKET_NAME__} S3 Bucket...')
     else:
         log.info(f'Skipping S3 download, using local model directory...')
 
