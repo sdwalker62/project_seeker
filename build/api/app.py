@@ -17,9 +17,13 @@ from langchain_core.runnables import (
 )
 
 from langchain_community.document_loaders.csv_loader import CSVLoader
+from langchain_community.document_loaders.json_loader import JSONLoader
 from pathlib import Path
 from langchain.prompts import PromptTemplate
-
+from langchain_community.vectorstores import Qdrant
+from typing import Dict, List, Union
+from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStoreRetriever
 
 app = FastAPI()
 
@@ -61,7 +65,7 @@ def generate(prompt: str) -> str:
 
 
 @app.get("/rag_generate")
-def rag_chatbot(prompt: str) -> str:
+def rag_generate(prompt: str) -> str:
     resp = rag_chain_with_source.invoke(prompt)
     return resp
 
@@ -70,56 +74,158 @@ def start_server(host: str, port: int) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
+class Retriever:
+    chunk_size: int = 384
+    """all-MiniLM-L6-v2 has a max token limit of 384."""
+    chunk_overlap: int = 100
+    """A value of 100 was chosen because of all-MiniLM-L6-v2's max token limit of 384."""
+    vector_datastore: Union[Chroma, Qdrant] = None
+    """Chroma and Qdrant are recommended, others can be added but haven't been tested."""
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_model: HuggingFaceEmbeddings = None
+    """Use a local embedding model to avoid reaching out to the internet."""
+    documents: List[Document] = None
+    """List of Document objects provided to the retriever as context."""
+    retriever: VectorStoreRetriever = None
+    model: Mixtral8x7b = Mixtral8x7b()
+
+    def __init__(
+        self, document_struct: Dict[str, Dict[str, Path]], embedding_model_name: str
+    ):
+        self.embedding_model_name = embedding_model_name
+        self.embedding_model = HuggingFaceEmbeddings(model_name=embedding_model_name)
+        self.documents = self.load_documents(document_struct)
+        self.documents = self.split_documents(self.documents)
+        # The Qdrant variant is set to use :memory: as the location, which means it will
+        # only be available in the current session. This is useful for testing but should
+        # be changed for production.
+        self.vector_datastore = Qdrant.from_documents(
+            self.documents,
+            self.embedding_model,
+            location=":memory:",
+            collection_name="acronyms",
+        )
+        self.retriever = self.vector_datastore.as_retriever()
+
+    def load_documents(self, documents: Dict[str, Dict[str, Path]]) -> List[Document]:
+        retrieved_documents = []
+        type_loader: Union[CSVLoader, JSONLoader] = None
+        for doc_type in documents.keys():
+            log.info(f"Loading storage type: {doc_type}...")
+            match doc_type:
+                case "csv":
+                    type_loader = CSVLoader
+                case "json":
+                    type_loader = JSONLoader
+            item_info = documents[doc_type]
+            for item, path in item_info.items():
+                log.info(f"Loading {item}...")
+                if path.exists():
+                    log.info(f"found it!")
+                    log.info(f"Loading {item} data...")
+                    csv_loader = type_loader(file_path=str(path))
+                    data = csv_loader.load()
+                    retrieved_documents += data
+                    log.info(f"Loaded {item} data!")
+                else:
+                    log.critical(f"{item} not found!")
+                    exit()
+        return retrieved_documents
+
+    def split_documents(self, data: List[Document]) -> List[Document]:
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
+        )
+        documents = text_splitter.split_documents(data)
+        return documents
+
+
 if __name__ == "__main__":
-    log.info("Starting server...")
-    log.info("Loading configuration files...")
-    config_path = Path("./config.toml").absolute()
-    if config_path.exists():
-        conf = toml.load(str(config_path))
-    else:
-        log.critical("config.toml not found!")
-        exit()
+    # region configuration
+    # ===================================================================================
 
-    log.info("Looking for acronym csv...")
-    acronym_path = Path("./acronyms.csv").absolute()
-    if acronym_path.exists():
-        log.info("found it!")
-        log.info("Loading acronym data...")
-        acronym_path = str(acronym_path)
-        csv_loader = CSVLoader(file_path=acronym_path)
-        acronym_data = csv_loader.load()
-        log.info("Loaded acronym data!")
-    else:
-        log.critical("acronyms.csv not found!")
-        exit()
+    # ===================================================================================
+    # endregion
 
-    log.info("Loading vectorstore...")
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=200)
-    splits = text_splitter.split_documents(acronym_data)
-    vectorstore = Chroma.from_documents(
-        documents=splits, embedding=HuggingFaceEmbeddings()
-    )
-    log.info("Loaded vectorstore!")
+    # region Server setup
+    # ===================================================================================
+    # log.info("Starting server...")
+    # log.info("Loading configuration files...")
+    # config_path = Path("./config.toml").absolute()
+    # if config_path.exists():
+    #     conf = toml.load(str(config_path))
+    # else:
+    #     log.critical("config.toml not found!")
+    #     exit()
+    # ===================================================================================
+    # endregion
 
+    # region Load acronym data
+    # ===================================================================================
+    # log.info("Looking for acronym csv...")
+    # acronym_path = Path("./acronyms.csv").absolute()
+    # if acronym_path.exists():
+    #     log.info("found it!")
+    #     log.info("Loading acronym data...")
+    #     acronym_path = str(acronym_path)
+    #     csv_loader = CSVLoader(file_path=acronym_path)
+    #     acronym_data = csv_loader.load()
+    #     log.info("Loaded acronym data!")
+    # else:
+    #     log.critical("acronyms.csv not found!")
+    #     exit()
+    # ===================================================================================
+    # endregion
+
+    # region Vector store
+    # ===================================================================================
+    # log.info("Loading vectorstore...")
+    # text_splitter = RecursiveCharacterTextSplitter(chunk_size=384, chunk_overlap=100)
+    # documents = text_splitter.split_documents(acronym_data)
+    # ===================================================================================
+    # endregion
+
+    # Embedding model
+    # ===================================================================================
+    # embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    # qdrant = Qdrant.from_documents(
+    #     documents,
+    #     embedding_model,
+    #     location=":memory:",  # Local mode with in-memory storage only
+    #     collection_name="acronyms",
+    # )
+    # vectorstore = Chroma.from_documents(documents=splits, embedding=embedding_model)
+    # log.info("Loaded vectorstore!")
+    # ===================================================================================
+
+    # ===================================================================================
     log.info("Loading retriever...")
-    retriever = vectorstore.as_retriever()
-    prompt = hub.pull("rlm/rag-prompt")
+    documents = {
+        "csv": {
+            "acronyms": Path("./acronyms.csv"),
+        }
+    }
+    retriever = Retriever(
+        document_struct=documents, embedding_model_name="all-MiniLM-L6-v2"
+    )
+    # retriever = qdrant.as_retriever()
+    # prompt = hub.pull("rlm/rag-prompt")
     log.info("Loaded retriever!")
 
-    log.info("Loading model...")
+    # log.info("Loading model...")
     model = Mixtral8x7b()
-    log.info("Loaded model!")
+    # log.info("Loaded model!")
 
-    log.info("Creating 'RAG' chain...")
-    rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | model
-        | StrOutputParser()
-    )
-    rag_chain_with_source = RunnableParallel(
-        {"context": retriever, "question": RunnablePassthrough()}
-    ).assign(answer=rag_chain)
-    log.info("Created 'RAG' chain!")
+    # log.info("Creating 'RAG' chain...")
+    # rag_chain = (
+    #     {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    #     | prompt
+    #     | model
+    #     | StrOutputParser()
+    # )
+    # rag_chain_with_source = RunnableParallel(
+    #     {"context": retriever, "question": RunnablePassthrough()}
+    # ).assign(answer=rag_chain)
+    # log.info("Created 'RAG' chain!")
 
     start_server(__API_HOST__, int(__API_PORT__))

@@ -6,3 +6,4 @@ fastapi
 sentence-transformers
 chromadb
 langchainhub
+qdrant-client
