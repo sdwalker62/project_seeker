@@ -14,17 +14,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import (
     RunnablePassthrough,
     RunnableParallel,
-    RunnableSerializable,
 )
-from langchain_core.messages import (
-    AIMessageChunk,
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-)
+
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from pathlib import Path
+from langchain.prompts import PromptTemplate
 
 
 app = FastAPI()
@@ -53,15 +47,17 @@ def health_check():
 
 
 @app.get("/generate")
-def chatbot(prompt: str) -> str:
-    messages = [
-        SystemMessage(
-            content="<s> [INST] You are a helpful AI assistant whose job is to answer questions as accurately as possible. [/INST] "
-        ),
-        HumanMessage(content=f"User: {prompt} Assistant: "),
-    ]
-    resp: AIMessage = model.invoke(messages)
-    return resp.content
+def generate(prompt: str) -> str:
+    system_instructions = "<s> [INST] You are a helpful AI assistant whose job is to answer questions as accurately as possible. [/INST] "
+    prompt_template = PromptTemplate.from_template(
+        "{system_instructions} User: {prompt} Assistant: "
+    )
+    prompt = prompt_template.format(
+        system_instructions=system_instructions, prompt=prompt
+    )
+
+    resp = model.invoke(prompt)
+    return resp
 
 
 @app.get("/rag_generate")

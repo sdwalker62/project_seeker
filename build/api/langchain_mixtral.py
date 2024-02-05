@@ -2,85 +2,74 @@ import json
 import toml
 import os
 
-from pprint import pprint
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models.base import LanguageModelInput
+from langchain_core.runnables import RunnableConfig
 from loguru import logger as log
-from typing import Any, Mapping, Iterator, List, Optional
+from typing import Any, Mapping, List
 from functools import partial
 from requests import request
 from pathlib import Path
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
-from langchain_core.language_models.chat_models import (
-    BaseChatModel,
-    generate_from_stream,
-)
-from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, AIMessage
-from langchain_core.outputs import ChatGenerationChunk, ChatResult, ChatGeneration
+from langchain_core.language_models.llms import BaseLLM
+from langchain_core.outputs import LLMResult
+from langchain_core.outputs import Generation
 
 
-__LLM_HOST__ = os.environ.get("LLM_SERVER_HOST", "127.0.0.1")
-__LLM_PORT__ = os.environ.get("LLM_SERVER_PORT", "7000")
-__LLM_API_URL__ = f"http://{__LLM_HOST__}:{__LLM_PORT__}"
-
-log.info("Loading configuration files...")
-config_path = Path("./config.toml").absolute()
-if config_path.exists():
-    conf = toml.load(str(config_path))
-    llm_server_conf = conf["llm-server"]
-    llm_conf = conf["mixtral8x7b"]
-
-    for k, v in llm_conf.items():
-        conf_k = "MIXTRAL8X7B_" + k.upper().replace("-", "_")
-        if conf_k in os.environ:
-            log.info(f"Overriding {k} with {os.environ[conf_k]}")
-            try:
-                env_val = float(os.environ[conf_k])
-                if env_val.is_integer():
-                    log.info(f"Converting {env_val} to int")
-                    env_val = int(env_val)
-                else:
-                    log.info(f"Converting {env_val} to float")
-                llm_conf[k] = env_val
-            except ValueError as e:
-                llm_conf[k] = os.environ[conf_k]
-
-    __MODEL_NAME__ = llm_conf["name"]
-    log.debug(f"llm_host: {__LLM_HOST__}")
-    log.debug(f"llm_host_port: {__LLM_PORT__}")
-    log.debug(f"llm_api_url: {__LLM_API_URL__}")
-    log.debug(f"Model name: {__MODEL_NAME__}")
-else:
-    log.critical("config.toml not found!")
-    exit()
-
-
-__HEADERS__ = {
-    "content-type": "application/json",
-    "cache-control": "no-cache",
-}
-__USER_NAME__ = "user"
-__PROMPT_HEADER__ = f"This is a conversation between {__MODEL_NAME__} and {__USER_NAME__}, a friendly chatbot. {__MODEL_NAME__} is helpful, kind, honest, good at writing, and never fails to answer any requests immediately and with precision.\n\n"
-log.debug(f"__PROMPT_HEADER__: {__PROMPT_HEADER__}")
-
-request_dict = llm_conf
-# request_dict["prompt"] = __PROMPT_HEADER__
-
-
-# Partial request for streaming to shorten the code
-req = partial(
-    request,
-    "POST",
-    __LLM_API_URL__ + "/completion",
-    headers=__HEADERS__,
-    stream=False,
-)
-
-
-class Mixtral8x7b(BaseChatModel):
+class Mixtral8x7b(BaseLLM):
+    model_name = "mixtral8x7b_instruct"
     streaming: bool = False
+    llm_host: str = os.environ.get("LLM_SERVER_HOST", "127.0.0.1")
+    llm_port: str = os.environ.get("LLM_SERVER_PORT", "7000")
+    llm_dispatch_url: str = f"http://{llm_host}:{llm_port}"
+    endpoint: str = "/completion"
+    url: str = llm_dispatch_url + endpoint
+    headers: Mapping[str, str] = {
+        "content-type": "application/json",
+        "cache-control": "no-cache",
+    }
+    dispatch = partial(
+        request,
+        method="POST",
+        url=url,
+        headers=headers,
+        stream=streaming,
+    )
+    conf: dict = None
 
     def __init__(self, streaming=False, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.streaming = streaming
+
+        log.info("Loading configuration files...")
+        config_path = Path("./config.toml").absolute()
+        if config_path.exists():
+            conf = toml.load(str(config_path))
+            llm_conf = conf["mixtral8x7b"]
+
+            for k in llm_conf.keys():
+                conf_k = "MIXTRAL8X7B_" + k.upper().replace("-", "_")
+                if conf_k in os.environ:
+                    log.info(f"Overriding {k} with {os.environ[conf_k]}")
+                    try:
+                        env_val = float(os.environ[conf_k])
+                        if env_val.is_integer():
+                            log.info(f"Converting {env_val} to int")
+                            env_val = int(env_val)
+                        else:
+                            log.info(f"Converting {env_val} to float")
+                        llm_conf[k] = env_val
+                    except ValueError as e:
+                        llm_conf[k] = os.environ[conf_k]
+
+            self.conf = llm_conf
+            log.debug(f"llm_host: {self.llm_host}")
+            log.debug(f"llm_host_port: {self.llm_port}")
+            log.debug(f"llm_api_url: {self.llm_dispatch_url}")
+            log.debug(f"Model name: {self.model_name}")
+        else:
+            log.critical("config.toml not found!")
+            exit()
 
     @property
     def _llm_type(self) -> str:
@@ -95,62 +84,39 @@ class Mixtral8x7b(BaseChatModel):
     @classmethod
     def is_lc_serializable(cls) -> bool:
         """Return whether this model can be serialized by Langchain."""
-        return True
+        return False
 
     @classmethod
     def get_lc_namespace(cls) -> List[str]:
         """Get the namespace of the langchain object."""
         return ["langchain", "chat_models", "mixtral8x7b"]
 
-    def _stream(
-        self,
-        prompt: List[HumanMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> Iterator[ChatGenerationChunk]:
-        prompt_str = prompt[0].content
-        request_dict["prompt"] = f"{__USER_NAME__}: {prompt_str}\n{__MODEL_NAME__}: "
-        log.info(f"\n\nprompt: {prompt_str}\n\n")
-        req_str = json.dumps(request_dict)
-        log.debug(f"req_str: {req_str}")
-        with req(data=req_str) as resp:
-            for line in resp.iter_lines(decode_unicode=True):
-                if line:
-                    split_val = "data: "
-                    res_str = line.split(split_val)[1]
-                    res_json = json.loads(res_str)
-                    res = res_json["content"]
-                    msg = AIMessageChunk(content=res)
-                    yield ChatGenerationChunk(message=msg)
+    def sanitize_output(self, output: str) -> str:
+        output = output.replace("\n", "")
+        return output.strip()
 
-        del request_dict["prompt"]
+    def invoke(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        *,
+        stop: List[str] | None = None,
+        **kwargs: Any,
+    ) -> str:
+        output = self._generate([input]).generations[0][0].text
+        return self.sanitize_output(output)
 
     def _generate(
         self,
-        prompt: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        prompts: List[str],
+        stop: List[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
-    ) -> ChatResult:
-        if self.streaming:
-            stream_iter = self._stream(
-                prompt=prompt,
-                stop=stop,
-                run_manager=run_manager,
-                **kwargs,
-            )
-            return generate_from_stream(stream_iter)
-        else:
-            # START = prompt[0].content
-            # END = prompt[2].content
-            # prompt_str = f"{START} {prompt[1].content} {END}"
-            request_dict["prompt"] = prompt[0].content + prompt[1].content
-            req_str = json.dumps(request_dict)
-            print("\n\n\n")
-            pprint(request_dict)
-            print("\n\n\n")
-            resp = req(data=req_str)
-            ai_msg = AIMessage(content=resp.json()["content"])
-            gens = [ChatGeneration(message=ai_msg)]
-            return ChatResult(generations=gens)
+    ) -> LLMResult:
+        self.conf["prompt"] = prompts
+        req_str = json.dumps(self.conf)
+        resp = self.dispatch(data=req_str)
+        resp = resp.json()["content"]
+        resp = Generation(text=resp)
+        del self.conf["prompt"]
+        return LLMResult(generations=[[resp]])
